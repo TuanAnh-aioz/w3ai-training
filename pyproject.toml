@@ -1,0 +1,67 @@
+[tool.ruff]
+# Exclude folders
+exclude = [
+    "env",
+    "env3",
+    "migrations",
+    "data",
+    "tests",
+    "third_party",
+    "build",
+    "dist",
+    "services",
+]
+
+# Target code style
+line-length = 180
+target-version = "py310"
+
+# Bật các rule lint cơ bản: E (pycodestyle), F (pyflakes), W (warnings)
+lint.select = ["E", "F", "W"]
+
+# Ignore những rule không phù hợp khi dùng Beanie ODM
+lint.ignore = [
+    "E711", # Allow `!= None` in query, vì Mongo ODM cần
+    "E712", # Allow `== False` in query, vì Mongo ODM cần
+    "W191", # Allow 4 spaces/tab for indentation
+    "W293", # Allow 1 space for indentation 
+    "E501",
+    # "F401"
+]
+
+# Format như black
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "auto"
+
+[tool.black]
+line-length = 150
+target-version = ["py310"]
+exclude = '''
+/(
+    env
+  | env3
+  | migrations
+  | data
+  | tests
+  | third_party
+  | build
+  | dist
+  | services
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+skip = [
+    "env",
+    "env3",
+    "migrations",
+    "data",
+    "tests",
+    "third_party",
+    "build",
+    "dist",
+    "services",
+]
