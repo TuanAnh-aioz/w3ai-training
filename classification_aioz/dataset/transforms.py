@@ -1,11 +1,3 @@
-"""
-file        : transforms.py
-create date : October 15, 2024
-author      : truong.manh.le@aioz.io
-description : Redefine some transform functions
-Aim to support transform the target image if it exists
-"""
-
 import random
 
 import cv2
@@ -16,17 +8,6 @@ from torchvision.transforms import functional as F
 
 
 def pad_if_smaller(img, size: int, fill: int = 0):
-    """Pads the image if its dimensions are smaller than the specified size.
-
-    Args:
-        img (_type_): The input image, either a PIL Image or a torch.Tensor.
-        size (int): Target size for the smallest dimension.
-        fill (int, optional): Padding value, can be an int or a tuple. Defaults to 0.
-
-    Returns:
-        _type_: The padded image or the original image if no padding is needed.
-    """
-
     min_size = min(img.size)
     if min_size < size:
         ow, oh = img.size

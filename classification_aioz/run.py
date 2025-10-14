@@ -1,22 +1,15 @@
-"""
-file        : run.py
-create date : October 07, 2024
-author      : truong.manh.le@aioz.io
-description : main func
-"""
-
 import logging
 import traceback
 from typing import Union
 
 import torch
 from aioz_ainode_base.trainer.exception import AINodeTrainerException
-from aioz_ainode_base.trainer.schemas import TrainerInput, TrainerOutput
+from aioz_ainode_base.trainer.schemas import IOExample, IOMetadata, TrainerInput, TrainerOutput
 
 from . import utils
 from .dataset import get_dataloader
 from .model import get_model
-from .trainer import Trainer
+from .trainer import Inference, Trainer
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +32,6 @@ def run(input_obj: Union[dict, TrainerInput] = None) -> TrainerOutput:
         train_loader, val_loader, test_loader = get_dataloader(
             dataset_dir=input_obj.dataset_directory,
             config=config["dataset"],
-            use_ImageNetNormalize=config["model"]["use_imageNet_pretrained_weight"],
             is_train=True,
         )
 
@@ -50,15 +42,15 @@ def run(input_obj: Union[dict, TrainerInput] = None) -> TrainerOutput:
 
         trainer = Trainer(model, train_loader, val_loader, config, device, checkpoint_dir, pretrained_model_dir)
         logger.info(f"Model parameters: {trainer.number_parameters_model()}")
-        _ = trainer.train()
+        best_checkpoint, best_metric = trainer.train()
 
         # Inference
-        # inference = Inference(model, test_loader, best_checkpoint, "image_classification", config, device)
-        # results = inference.run()
+        inference = Inference(model, test_loader, best_checkpoint, "image_classification", config, device)
+        results = inference.run()
 
         # # Create output
-        # example = [IOExample(input=IOMetadata(data=path, type=str), output=IOMetadata(data=label, type=str)) for path, label in results]
-        output_obj = TrainerOutput(weights=trainer.best_weight_path, examples=[])
+        example = [IOExample(input=IOMetadata(data=path, type=str), output=IOMetadata(data=label, type=str)) for path, label in results]
+        output_obj = TrainerOutput(weights=best_checkpoint, metric=best_metric, examples=example)
         utils.clean_checkpoints(checkpoint_dir)
         return output_obj
 

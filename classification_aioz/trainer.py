@@ -12,7 +12,7 @@ from collections import OrderedDict
 
 import torch
 
-from .utils import get_metric, get_optimizer
+from .utils import get_metric, get_optimizer, get_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,7 @@ class Trainer(BaseTrainer):
         super().__init__(model, config, device, checkpoint_dir)
         self.config = config
         torch.manual_seed(self.config["hyper_parameter"]["seed"])
+
         self.load_pretrained_model(pretrained_model_dir)  # load pretrained weight on task's dataset
         self.setup_model()
         self.train_dataloader = data_train
@@ -183,8 +184,20 @@ class Trainer(BaseTrainer):
         # Setting up necessary elements: loss function, optimizer, lr scheduler, ...
         self.criterion = torch.nn.CrossEntropyLoss()
         self.metric = get_metric()
-        self.optimizer = get_optimizer(self.config["hyper_parameter"]["optimizer"], self.model, lr_initial=self.config["hyper_parameter"]["lr"])
-        self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=self.config["hyper_parameter"]["gamma"])
+
+        optimizer_cfg = self.config["hyper_parameter"]["optimizer"]
+        scheduler_cfg = self.config["hyper_parameter"]["scheduler"]
+        self.optimizer = get_optimizer(
+            optimizer_cfg["name"], model, lr_initial=optimizer_cfg.get("lr_initial", 1e-3), optimizer_params=optimizer_cfg.get("params", {})
+        )
+        self.lr_scheduler = get_scheduler(
+            scheduler_cfg["name"],
+            self.optimizer,
+            scheduler_params=scheduler_cfg.get("params", {}),
+            num_epochs=self.config["hyper_parameter"].get("n_rounds", None),
+            num_steps_per_epoch=len(self.train_dataloader),
+        )
+
         self.best_weight_path = None
 
     def load_pretrained_model(self, pretrained_model_dir):
@@ -310,7 +323,7 @@ class Trainer(BaseTrainer):
             self.save_lr_scheduler()
             self.round_idx += 1
 
-        return self.best_weight_path
+        return self.best_weight_path, self.best_metric
 
     def validate_one_epoch(self):
         self.model.eval()

@@ -1,15 +1,10 @@
-"""
-file        : dataset.py
-create date : October 15, 2024
-author      : truong.manh.le@aioz.io
-description : define dataset and dataloader
-"""
-
 import logging
 import os
 import traceback
+from abc import ABC, abstractmethod
 
 import numpy as np
+import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
 from .utils import get_transform, load_image_opencv, read_csv_file
@@ -17,45 +12,54 @@ from .utils import get_transform, load_image_opencv, read_csv_file
 logger = logging.getLogger(__name__)
 
 
-class ImageDataset(Dataset):
-    def __init__(self, data_dir: str, config: dict, use_ImageNetNormalize: bool, is_train: bool):
+class ImageDataset(Dataset, ABC):
+    def __init__(self, data_dir: str, config: dict, is_train: bool):
         self.config = config
         self.data_dir = data_dir
-        self.metadata_path = os.path.join(self.data_dir, "metadata.csv")  # fmt: file, label_index, label_name
-
-        # resize = True when training or evaluating for all tasks, except image segmentation inference
-        self.transform = get_transform(config["width"], config["height"], use_ImageNetNormalize, is_train, resize=True)
-
-        self.img_path = np.asarray([])
-        self.ground_truth = np.asarray([])
-
+        self.metadata_path = os.path.join(self.data_dir, "metadata.csv")
+        self.transform = get_transform(config, is_train)
+        self.img_path = []
+        self.ground_truth = []
         self.load_data()
 
     def load_data(self):
-        logger.debug(f"Loading metadata from: {self.metadata_path}")
+        if not os.path.exists(self.metadata_path):
+            raise FileNotFoundError(f"Metadata file not found: {self.metadata_path}")
+
         df = read_csv_file(self.metadata_path)
+        if df is None or df.empty:
+            raise ValueError(f"Metadata file is empty or unreadable: {self.metadata_path}")
+
         df = df.dropna()
         for _, row in df.iterrows():
             im_path = os.path.join(self.data_dir, row["file"])
-            ground_truth = int(row["label_index"])
-            self.img_path = np.append(self.img_path, im_path)
-            self.ground_truth = np.append(self.ground_truth, ground_truth)
+            if not os.path.exists(im_path):
+                logger.warning(f"Missing image: {im_path}")
+                continue
+            self.img_path.append(im_path)
+            self.ground_truth.append(int(row["label_index"]))
+
+        logger.info(f"Loaded {len(self.img_path)} samples from {self.metadata_path}")
 
     def __len__(self):
         return len(self.img_path)
 
+    @abstractmethod
     def __getitem__(self, index):
-        pass
+        raise NotImplementedError("Subclasses must implement __getitem__().")
 
 
 class ImageClassificationDataset(ImageDataset):
-    def __init__(self, dataset_dir: str, config: dict, use_ImageNetNormalize: bool, is_train: bool):
-        super(ImageClassificationDataset, self).__init__(dataset_dir, config, use_ImageNetNormalize, is_train)
+    def __init__(self, dataset_dir: str, config: dict, is_train: bool):
+        super(ImageClassificationDataset, self).__init__(dataset_dir, config, is_train)
 
     def __getitem__(self, index: int):
         img_path = self.img_path[index]
-        # Must use OpenCV to load an image because it has a TypeScript version.
         img = load_image_opencv(img_path, color=self.config["color"])
+        if img is None:
+            logger.warning(f"Cannot load image: {img_path}")
+            img = np.zeros((self.config["height"], self.config["width"], 3), dtype=np.uint8)
+
         if self.transform is not None:
             img = self.transform(img)
 
@@ -63,82 +67,42 @@ class ImageClassificationDataset(ImageDataset):
         return img, ground_truth, img_path
 
 
-def get_dataloader(dataset_dir: str, config: dict, use_ImageNetNormalize: bool = False, is_train: bool = True):
-    """
-    Creates dataloaders for training, validation, or testing.
-
-    Args:
-        dataset_dir (str): Path to the dataset directory.
-        config (dict): Configuration dictionary containing dataloader parameters.
-            Expected keys: 'batch_size', 'num_workers', 'pin_memory'.
-        use_imagenet_normalize (bool): Whether to apply ImageNet normalization. Defaults to False.
-        is_train (bool): Whether to prepare data for training (True) or testing (False). Defaults to True.
-
-    Returns:
-        tuple: A tuple containing the dataloader and optionally a validation dataloader (None if `is_train` is False).
-    """
-
+def get_dataloader(dataset_dir: str, config: dict, is_train=True):
     try:
-        full_dataset = ImageClassificationDataset(dataset_dir, config, use_ImageNetNormalize, is_train=True)
+        dataset = ImageClassificationDataset(dataset_dir, config, is_train=True)
+        total_size = len(dataset)
+        train_size = int(config["train_split"] * total_size)
+        val_size = int(config["val_split"] * (total_size - train_size))
+        test_size = total_size - train_size - val_size
 
-        dataset_size = len(full_dataset)
-        train_size = int(config["train_split"] * dataset_size)
-        remaining_size = dataset_size - train_size
-        val_size = int(config["val_split"] * remaining_size)
-        test_size = remaining_size - val_size
+        generator = torch.Generator().manual_seed(config.get("seed", 42))
+        subsets = random_split(dataset, [train_size, val_size, test_size], generator=generator)
 
+        transforms = {"train": get_transform(config, train=True), "eval": get_transform(config, train=False)}
+
+        loaders = {}
         if is_train:
-            train_dataset, val_dataset, test_dataset = random_split(full_dataset, [train_size, val_size, test_size])
-            val_dataset.dataset.transform = get_transform(
-                width=config["width"], height=config["height"], use_ImageNetNormalize=use_ImageNetNormalize, train=False
-            )
-            test_dataset.dataset.transform = get_transform(
-                width=config["width"], height=config["height"], use_ImageNetNormalize=use_ImageNetNormalize, train=False
-            )
-
-            train_loader = DataLoader(
-                train_dataset,
-                shuffle=True,
-                batch_size=config["batch_size"],
-                num_workers=config["num_workers"],
-                pin_memory=config["pin_memory"],
-                drop_last=True,
-            )
-
-            val_loader = DataLoader(
-                val_dataset,
-                shuffle=False,
-                batch_size=config["batch_size"],
-                num_workers=config["num_workers"],
-                pin_memory=config["pin_memory"],
-                drop_last=False,
-            )
-
-            test_loader = DataLoader(
-                test_dataset,
-                shuffle=False,
-                batch_size=config["batch_size"],
-                num_workers=config["num_workers"],
-                pin_memory=config["pin_memory"],
-                drop_last=False,
-            )
-
-            return train_loader, val_loader, test_loader
+            subsets[0].dataset.transform = transforms["train"]
+            subsets[1].dataset.transform = transforms["eval"]
+            subsets[2].dataset.transform = transforms["eval"]
+            names = ["train", "val", "test"]
         else:
-            full_dataset.dataset.transform = get_transform(
-                width=config["img_size"][0], height=config["img_size"][1], use_ImageNetNormalize=use_ImageNetNormalize, train=False
-            )
-            test_loader = DataLoader(
-                full_dataset,
-                shuffle=False,
+            subsets = [dataset]
+            dataset.transform = transforms["eval"]
+            names = ["test"]
+
+        for i, name in enumerate(names):
+            loaders[name] = DataLoader(
+                subsets[i],
+                shuffle=(name == "train"),
                 batch_size=config["batch_size"],
                 num_workers=config["num_workers"],
                 pin_memory=config["pin_memory"],
-                drop_last=True,
+                drop_last=(name == "train"),
             )
 
-            return None, None, test_loader
+        return loaders.get("train"), loaders.get("val"), loaders.get("test")
 
-    except Exception:
-        logger.warning(f"Occur an error {traceback.format_exc()}")
+    except Exception as e:
+        logger.warning(f"Error creating dataloader: {e}\n{traceback.format_exc()}")
         return None, None, None
