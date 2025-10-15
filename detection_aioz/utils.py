@@ -1,14 +1,15 @@
-import inspect
 import json
+import logging
 import os
 import random
 from collections import defaultdict
-from typing import Iterable
 
 import cv2
 import numpy as np
 import torch
 import torchvision
+
+logger = logging.getLogger(__name__)
 
 
 def load_config(fp: str) -> dict:
@@ -25,48 +26,77 @@ def load_config(fp: str) -> dict:
     return d
 
 
-def get_optimizer(config: dict, model: Iterable[torch.nn.Parameter]):
+def get_optimizer(optimizer_name, net, lr_initial=1e-3, optimizer_params=None, param_groups=None):
+    optimizer_name = optimizer_name.lower()
+    optimizer_params = optimizer_params or {}
+
+    # Choose params
+    if param_groups is not None:
+        params = param_groups
+    else:
+        params = [p for p in net.parameters() if p.requires_grad]
+
+    # Optimizer mapping
     optimizers = {
-        "sgd": torch.optim.SGD,
         "adam": torch.optim.Adam,
         "adamw": torch.optim.AdamW,
+        "sgd": torch.optim.SGD,
         "rmsprop": torch.optim.RMSprop,
+        "adagrad": torch.optim.Adagrad,
+        "adadelta": torch.optim.Adadelta,
+        "adamax": torch.optim.Adamax,
+        "lion": torch.optim.Lion if hasattr(torch.optim, "Lion") else None,  # PyTorch ≥ 2.1
     }
 
-    name = config.get("name", "").lower()
-    if name not in optimizers:
-        raise ValueError(f"Optimizer '{name}' not supported!")
+    if optimizer_name not in optimizers or optimizers[optimizer_name] is None:
+        raise NotImplementedError(f"Optimizer '{optimizer_name}' is not implemented or not available in this PyTorch version.")
 
-    optimizer_class = optimizers[name]
+    # Merge lr into optimizer_params
+    if "lr" not in optimizer_params:
+        optimizer_params["lr"] = lr_initial
 
-    valid_params = inspect.signature(optimizer_class).parameters.keys()
+    optimizer_class = optimizers[optimizer_name]
+    optimizer = optimizer_class(params, **optimizer_params)
 
-    optim_config = {k: v for k, v in config.items() if k in valid_params}
+    logger.info(f"Using optimizer: {optimizer_name.upper()} with params: {optimizer_params}")
+    return optimizer
 
-    return optimizer_class(model, **optim_config)
 
+def get_scheduler(scheduler_name, optimizer, scheduler_params=None, num_epochs=None, num_steps_per_epoch=None):
+    scheduler_name = scheduler_name.lower()
+    scheduler_params = scheduler_params or {}
 
-def get_scheduler(config: dict, optimizer: torch.optim.Optimizer):
     schedulers = {
-        "steplr": torch.optim.lr_scheduler.StepLR,
-        "reducelronplateau": torch.optim.lr_scheduler.ReduceLROnPlateau,
-        "cosineannealing": torch.optim.lr_scheduler.CosineAnnealingLR,
-        "exponentiallr": torch.optim.lr_scheduler.ExponentialLR,
-        "linearlr": torch.optim.lr_scheduler.LinearLR,
-        "multisteplr": torch.optim.lr_scheduler.MultiStepLR,
+        "step": torch.optim.lr_scheduler.StepLR,
+        "multi_step": torch.optim.lr_scheduler.MultiStepLR,
+        "exponential": torch.optim.lr_scheduler.ExponentialLR,
+        "cosine": torch.optim.lr_scheduler.CosineAnnealingLR,
+        "cosine_annealing": torch.optim.lr_scheduler.CosineAnnealingLR,
+        "cosine_restarts": torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
+        "plateau": torch.optim.lr_scheduler.ReduceLROnPlateau,
+        "onecycle": torch.optim.lr_scheduler.OneCycleLR,
+        "linear": torch.optim.lr_scheduler.LinearLR,
+        "polynomial": torch.optim.lr_scheduler.PolynomialLR if hasattr(torch.optim.lr_scheduler, "PolynomialLR") else None,
     }
 
-    name = config.get("name", "").lower()
-    if name not in schedulers:
-        raise ValueError(f"Scheduler '{name}' not supported!")
+    if scheduler_name not in schedulers or schedulers[scheduler_name] is None:
+        raise NotImplementedError(f"Scheduler '{scheduler_name}' is not implemented or not available in this PyTorch version.")
 
-    scheduler_class = schedulers[name]
+    # Special handling for some schedulers
+    if scheduler_name in ["onecycle"]:
+        # For OneCycleLR, you must provide total_steps or epochs * steps_per_epoch
+        if num_epochs is None or num_steps_per_epoch is None:
+            raise ValueError("For OneCycleLR, you must provide num_epochs and num_steps_per_epoch.")
+        total_steps = num_epochs * num_steps_per_epoch
+        scheduler_params.setdefault("total_steps", total_steps)
+        scheduler_params.setdefault("max_lr", [pg["lr"] for pg in optimizer.param_groups])
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, **scheduler_params)
+    else:
+        scheduler_class = schedulers[scheduler_name]
+        scheduler = scheduler_class(optimizer, **scheduler_params)
 
-    valid_params = inspect.signature(scheduler_class).parameters.keys()
-
-    sched_config = {k: v for k, v in config.items() if k in valid_params}
-
-    return scheduler_class(optimizer, **sched_config)
+    logger.info(f"Using LR scheduler: {scheduler_name.upper()} with params: {scheduler_params}")
+    return scheduler
 
 
 def apply_nms(orig_prediction, iou_thresh: float = 0.5):

@@ -150,8 +150,18 @@ class Trainer(BaseTrainer):
         self.test_dataloader = test_data
         self.output_dir = output_dir
 
-        self.optimizer = get_optimizer(config=self.config["hyper_parameter"]["optimizer"], model=parameters)
-        self.lr_scheduler = get_scheduler(config=self.config["hyper_parameter"]["lr_scheduler"], optimizer=self.optimizer)
+        optimizer_cfg = self.config["hyper_parameter"]["optimizer"]
+        scheduler_cfg = self.config["hyper_parameter"]["scheduler"]
+        self.optimizer = get_optimizer(
+            optimizer_cfg["name"], model, lr_initial=optimizer_cfg.get("lr_initial", 1e-3), optimizer_params=optimizer_cfg.get("params", {})
+        )
+        self.lr_scheduler = get_scheduler(
+            scheduler_cfg["name"],
+            self.optimizer,
+            scheduler_params=scheduler_cfg.get("params", {}),
+            num_epochs=self.config["hyper_parameter"].get("n_rounds", None),
+            num_steps_per_epoch=len(self.train_dataloader),
+        )
         self.scaler = torch.cuda.amp.GradScaler()
         self.best_weight_path = None
 
