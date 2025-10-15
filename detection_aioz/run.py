@@ -54,7 +54,7 @@ def run(input_obj: Union[dict, TrainerInput] = None) -> TrainerOutput:
         # Create output
         example = [IOExample(input=IOMetadata(data=path, type=str), output=IOMetadata(data=label, type=str)) for path, label in results]
 
-        output_obj = TrainerOutput(weights=trainer.best_weight_path, examples=example)
+        output_obj = TrainerOutput(weights=trainer.best_weight_path, metrix=trainer.best_metric, examples=example)
         utils.clean_checkpoints(checkpoint_dir)
         return output_obj
 

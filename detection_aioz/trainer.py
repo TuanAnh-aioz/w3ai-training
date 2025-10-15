@@ -280,10 +280,10 @@ class Trainer(BaseTrainer):
                 wp = self.save_model(is_best=True)
                 self.best_weight_path = wp
 
-            self.save_model()
+            # self.save_model()
             self.round_idx += 1
 
-        return self.best_weight_path
+        return self.best_weight_path, self.best_metric
 
     def inference(self):
         results = []
