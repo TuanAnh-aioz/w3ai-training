@@ -38,9 +38,9 @@ def run(input_obj: Union[dict, TrainerInput] = None) -> TrainerOutput:
         # Create Trainer
         model = get_model(config=config["model"])
         checkpoint_dir = input_obj.checkpoint_directory
-        pretrained_model_dir = input_obj.pretrained_model_directory
+        # pretrained_model_dir = input_obj.pretrained_model_directory
 
-        trainer = Trainer(model, train_loader, val_loader, config, device, checkpoint_dir, pretrained_model_dir)
+        trainer = Trainer(model, train_loader, val_loader, config, device, checkpoint_dir)
         logger.info(f"Model parameters: {trainer.number_parameters_model()}")
         best_checkpoint, best_metric = trainer.train()
 

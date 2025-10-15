@@ -26,6 +26,7 @@ class BaseTrainer(ABC):
         self.best_metric = 0.0
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(self.checkpoint_dir, exist_ok=True)
+
         # Define file name fmt
         self.checkpoint_name_fmt = "round_{round_idx}.pth"
         self.optim_name_fmt = "round_{round_idx}_optimizer.pth"
@@ -42,37 +43,6 @@ class BaseTrainer(ABC):
         # Define in subclass
         # Return two value: loss, metric after calculate
         pass
-
-    def find_the_last_round(self, checkpoint_dir, type="round"):
-        if os.path.isdir(checkpoint_dir):
-            list_checkpoint_files = os.listdir(checkpoint_dir)
-            list_rounds = []
-            for file_name in list_checkpoint_files:
-                parts = file_name.split("_")
-                if len(parts) != 2:
-                    continue
-                index, prefix = parts[1].split(".")
-                if type == parts[0] and prefix == "pth":
-                    try:
-                        int(index)
-                        # check if the optimizer of this round exists?
-                        optimizer_path = os.path.join(checkpoint_dir, "{}_{}_optimizer.{}".format(type, index, prefix))
-                        lr_scheduler_path = os.path.join(checkpoint_dir, "{}_{}_lr_scheduler.{}".format(type, index, prefix))  # noqa E405
-                        if os.path.exists(optimizer_path) and os.path.exists(lr_scheduler_path):
-                            list_rounds.append(int(index))
-                    except Exception:
-                        continue
-
-            if len(list_rounds) > 0:
-                last_round = max(list_rounds)
-                last_trained_round = os.path.join(checkpoint_dir, self.checkpoint_name_fmt.format(round_idx=last_round))
-                last_trained_round_optimizer = os.path.join(checkpoint_dir, self.optim_name_fmt.format(round_idx=last_round))  # noqa E405
-                last_trained_round_lr_scheduler = os.path.join(checkpoint_dir, self.lr_scheduler_name_fmt.format(round_idx=last_round))  # noqa E405
-                return last_trained_round, last_trained_round_optimizer, last_trained_round_lr_scheduler
-            else:
-                return None, None, None
-        else:
-            return None, None, None
 
     def fit_batches(self, n_steps):
         global_loss = 0
@@ -169,15 +139,15 @@ class Trainer(BaseTrainer):
         config: dict,
         device: str,
         checkpoint_dir: str = "checkpoints",
-        pretrained_model_dir: str = "pretrained_model",
     ):
         # so important elements of the trainer: model, dataloader
         super().__init__(model, config, device, checkpoint_dir)
         self.config = config
         torch.manual_seed(self.config["hyper_parameter"]["seed"])
 
-        self.load_pretrained_model(pretrained_model_dir)  # load pretrained weight on task's dataset
         self.setup_model()
+        self.setup_pretrained()
+
         self.train_dataloader = data_train
         self.validator_dataloader = data_val
 
@@ -200,11 +170,47 @@ class Trainer(BaseTrainer):
 
         self.best_weight_path = None
 
-    def load_pretrained_model(self, pretrained_model_dir):
-        if os.path.exists(pretrained_model_dir):
-            pretrained_model_list = os.listdir(pretrained_model_dir)
-            for pretrained_model_path in pretrained_model_list:
-                self.load_model(os.path.join(pretrained_model_dir, pretrained_model_path))
+    def setup_pretrained(self):
+        pretrained_cfg = self.config["model"].get("pretrained", {})
+        pretrained_type = pretrained_cfg.get("type", None)
+        pretrained_path = pretrained_cfg.get("path", None)
+
+        if pretrained_type == "resume":
+            self.resume_checkpoint(pretrained_path)
+        elif pretrained_type == "finetune":
+            self.load_pretrained_model(pretrained_path)
+        else:
+            logger.info(f"Unknown pretrained type: {pretrained_type}. Skipping loading pretrained weights.")
+
+    def resume_checkpoint(self, checkpoint_path):
+        if not os.path.exists(checkpoint_path):
+            logger.info(f"Checkpoint not found: {checkpoint_path}")
+            return
+
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint["model_state"])
+        # self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        # self.lr_scheduler.load_state_dict(checkpoint["lr_scheduler_state"])
+        self.round_idx = checkpoint.get("round", 0)
+        self.best_metric = checkpoint.get("best_metric", 0.0)
+
+        logger.info(f"Resumed training from round {self.round_idx} | best metric = {self.best_metric:.4f}")
+
+    def load_pretrained_model(self, pretrained_path):
+        if not pretrained_path or not os.path.exists(pretrained_path):
+            logger.info(f"Pretrained model not found: {pretrained_path}")
+            return
+
+        checkpoint = torch.load(pretrained_path, map_location=self.device)
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+
+        missing_keys, unexpected_keys = self.model.load_state_dict(state_dict, strict=False)
+        logger.info(f"Loaded pretrained weights from {pretrained_path}")
+        if missing_keys:
+            logger.info(f"Missing keys: {missing_keys}")
+
+        if unexpected_keys:
+            logger.info(f"Unexpected keys: {unexpected_keys}")
 
     # TODO: setting up model
     def setup_model(self):
@@ -319,8 +325,8 @@ class Trainer(BaseTrainer):
                 self.best_weight_path = wp
 
             self.save_model()
-            self.save_optimizer()
-            self.save_lr_scheduler()
+            # self.save_optimizer()
+            # self.save_lr_scheduler()
             self.round_idx += 1
 
         return self.best_weight_path, self.best_metric
