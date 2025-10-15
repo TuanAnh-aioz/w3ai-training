@@ -90,7 +90,7 @@ def get_model(config: dict) -> nn.Module:
     backbone_name = AVAILABLE_BACKBONE.get(backbone_key)
 
     if backbone_name is None:
-        logger.warning(f"Invalid backbone '{backbone_key}', using default Net. " f"Available backbones: {list(AVAILABLE_BACKBONE.keys())}")
+        logger.warning(f"Invalid backbone '{backbone_key}', using default Net.")
         return Net(num_classes=config["num_classes"])
 
     # Load pretrained weights or random init
